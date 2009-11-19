@@ -21,7 +21,6 @@ Puppet::Application.new(:puppetd) do
         {
             :waitforcert => 120,  # Default to checking for certs every 5 minutes
             :onetime => false,
-            :detailed_exitcodes => false,
             :verbose => false,
             :debug => false,
             :centrallogs => false,
@@ -66,10 +65,6 @@ Puppet::Application.new(:puppetd) do
         options[:waitforcert] = 0 unless @explicit_waitforcert
     end
 
-    option("--detailed-exitcodes") do |arg|
-        options[:detailed_exitcodes] = true
-    end
-
     option("--logdest DEST", "-l DEST") do |arg|
         begin
             Puppet::Util::Log.newdestination(arg)
@@ -100,27 +95,19 @@ Puppet::Application.new(:puppetd) do
         unless options[:client]
             $stderr.puts "onetime is specified but there is no client"
             exit(43)
-            return
         end
 
         @daemon.set_signal_traps
 
         begin
-            report = @agent.run
+            @agent.run
         rescue => detail
             if Puppet[:trace]
                 puts detail.backtrace
             end
             Puppet.err detail.to_s
         end
-
-        if not report
-            exit(1)
-        elsif not Puppet[:noop] and options[:detailed_exitcodes] then
-            exit(report.exit_status)
-        else
-            exit(0)
-        end
+        exit(0)
     end
 
     command(:main) do
@@ -138,7 +125,6 @@ Puppet::Application.new(:puppetd) do
         Puppet.settings.handlearg("--no-daemonize")
         options[:verbose] = true
         options[:onetime] = true
-        options[:detailed_exitcodes] = true
         options[:waitforcert] = 0 unless @explicit_waitforcert
     end
 
