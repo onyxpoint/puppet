@@ -21,6 +21,7 @@ Puppet::Application.new(:puppetd) do
         {
             :waitforcert => 120,  # Default to checking for certs every 5 minutes
             :onetime => false,
+            :detailed_exitcodes => false,
             :verbose => false,
             :debug => false,
             :centrallogs => false,
@@ -65,6 +66,10 @@ Puppet::Application.new(:puppetd) do
         options[:waitforcert] = 0 unless @explicit_waitforcert
     end
 
+    option("--detailed-exitcodes") do |arg|
+        options[:detailed_exitcodes] = true
+    end
+
     option("--logdest DEST", "-l DEST") do |arg|
         begin
             Puppet::Util::Log.newdestination(arg)
@@ -95,19 +100,27 @@ Puppet::Application.new(:puppetd) do
         unless options[:client]
             $stderr.puts "onetime is specified but there is no client"
             exit(43)
+            return
         end
 
         @daemon.set_signal_traps
 
         begin
-            @agent.run
+            report = @agent.run
         rescue => detail
             if Puppet[:trace]
                 puts detail.backtrace
             end
             Puppet.err detail.to_s
         end
-        exit(0)
+
+        if not report
+            exit(1)
+        elsif not Puppet[:noop] and options[:detailed_exitcodes] then
+            exit(report.exit_status)
+        else
+            exit(0)
+        end
     end
 
     command(:main) do
@@ -125,7 +138,8 @@ Puppet::Application.new(:puppetd) do
         Puppet.settings.handlearg("--no-daemonize")
         options[:verbose] = true
         options[:onetime] = true
-        options[:waitforcert] = 0 unless @explicit_waitforcert
+        options[:detailed_exitcodes] = true
+        options[:waitforcert] = 0
     end
 
     # Handle the logging settings.
@@ -158,6 +172,13 @@ Puppet::Application.new(:puppetd) do
             Puppet.err "Will not start without authorization file %s" %
                 Puppet[:authconfig]
             exit(14)
+        end
+
+        # FIXME: we should really figure out how to distribute the CRL
+        # to clients. In the meantime, we just disable CRL checking if
+        # the CRL file doesn't exist
+        unless File::exist?(Puppet[:cacrl])
+            Puppet[:cacrl] = 'false'
         end
 
         handlers = nil
