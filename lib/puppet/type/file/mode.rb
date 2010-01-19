@@ -32,9 +32,9 @@ module Puppet
 
         # The general mask for activating the appropriate sections of 'how'.
         SYMLEFT = {
-                    "u" => 05700, 
-                    "g" => 03070, 
-                    "o" => 01007, 
+                    "u" => 05700,
+                    "g" => 03070,
+                    "o" => 01007,
                     "a" => 07777
                   }
        # The regular expression for matching a valid symbolic mode.
@@ -48,7 +48,7 @@ module Puppet
         # string or as a File::Stat object.
         def sym2oct(curmode,newmode)
             if !curmode.nil? and curmode.to_s =~ /^\d+$/ then
-                value = curmode 
+                value = curmode
             else
                 # Set this to 0600 so that we can actually read and write the
                 # file as a normal user.
@@ -113,7 +113,7 @@ module Puppet
 
         def should_to_s(newvalue = @should)
             if newvalue.is_a?(Integer) then
-                return "%o" % newvalue 
+                return "%o" % newvalue
             elsif ( newvalue.is_a?(Symbol) or ( newvalue.is_a?(String) and newvalue.match(SYMREG))) then
                 return newvalue
             else
