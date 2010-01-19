@@ -725,7 +725,7 @@ module Puppet
                 path = self[:path]
               end
 
-            mode = self.should(:mode) # might be nil
+            mode = self.property(:mode).sym2oct(self.stat,self.should(:mode)) # might be nil
             umask = mode ? 000 : 022
 
             Puppet::Util.withumask(umask) do

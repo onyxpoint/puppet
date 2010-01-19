@@ -23,33 +23,44 @@ module Puppet
             mode 644, and all of the directories will have mode 755."
         @event = :file_changed
 
-        # This is a helper that takes a symbolic string and a file path and
+        # The bitwise position of the UGO fields.
+        SYMBASE = {
+                    "u" => 6,
+                    "g" => 3,
+                    "o" => 0
+                  }
+
+        # The general mask for activating the appropriate sections of 'how'.
+        SYMLEFT = {
+                    "u" => 05700, 
+                    "g" => 03070, 
+                    "o" => 01007, 
+                    "a" => 07777
+                  }
+       # The regular expression for matching a valid symbolic mode.
+       SYMREG = /^(([ugoa]+)([+-=])([rwxst]+|[ugo]),?)+$/
+
+        # This is a helper that takes the current mode and the new mode and
         # returns the adjusted decimal representation octal file mode (0700,
         # etc...)
-        def sym2oct(str,path)
-            if str.to_s =~ /^\d+$/
-                value = str
+        #
+        # The current mode (curmode) can be represented either as an integer
+        # string or as a File::Stat object.
+        def sym2oct(curmode,newmode)
+            if !curmode.nil? and curmode.to_s =~ /^\d+$/ then
+                value = curmode 
             else
-                curmode = "00000"
-                if File.exists?(path) then
-                    curmode = "%o" % File.stat(path).mode
-                    curmode = curmode[-5 .. -1]
+                # Set this to 0600 so that we can actually read and write the
+                # file as a normal user.
+                if curmode.nil? then
+                    value = 00600
+                elsif curmode.is_a?(File::Stat) then
+                    value = curmode.mode & 07777
+                else
+                    value = Integer(curmode)
                 end
-                value = Integer(curmode)
-    
-                base =  {
-                        "u" => 6,
-                        "g" => 3,
-                        "o" => 0
-                        }
 
-                left =  {
-                        "u" => 05700, 
-                        "g" => 03070, 
-                        "o" => 01007, 
-                        "a" => 07777
-                        }
-
+                # This needs to remain variable.
                 right = {
                         "r" => 00444, 
                         "w" => 00222, 
@@ -61,21 +72,19 @@ module Puppet
                         "o" => 00007 
                         }
 
-                reg = /^(([ugoa]+)([+-=])([rwxst]+|[ugo]),?)+$/
-    
-                str.split(",").each do |cmd|
-                    match = cmd.match(reg) or return curmode
+                newmode.split(",").each do |cmd|
+                    match = cmd.match(SYMREG) or return curmode
                     # The following vars are directly dependent on the
-                    # structure of the regex (reg) above
+                    # structure of SYMREG above
                     who = match[2]
                     what = match[3]
                     how = match[4].split(//).uniq.to_s
                     if how =~ /^[ugo]$/ then
                       who.split(//).uniq.each do |lhv|
-                        right[how] = ( ((value << (base[lhv] - base[how])) & right[lhv]) | ( value & ~right[lhv] ) ) & 0777
+                        right[how] = ( ((value << (SYMBASE[lhv] - SYMBASE[how])) & right[lhv]) | ( value & ~right[lhv] ) ) & 0777
                       end
                     end
-                    who = who.split(//).inject(num=0) {|num,b| num |= left[b]; num }
+                    who = who.split(//).inject(num=0) {|num,b| num |= SYMLEFT[b]; num }
                     how = how.split(//).inject(num=0) {|num,b| num |= right[b]; num }
                     mask = who & how
                     case what
@@ -92,10 +101,9 @@ module Puppet
         # Our modes are octal, so make sure they print correctly.  Other
         # valid values are symbols, basically
         def is_to_s(currentvalue)
-            case currentvalue
-            when Integer
+            if currentvalue.is_a?(Integer) then
                 return "%o" % currentvalue
-            when Symbol
+            elsif ( currentvalue.is_a?(Symbol) or ( currentvalue.is_a?(String) and currentvalue.match(SYMREG))) then
                 return currentvalue
             else
                 raise Puppet::DevError, "Invalid current value for mode: %s" %
@@ -104,10 +112,9 @@ module Puppet
         end
 
         def should_to_s(newvalue = @should)
-            case newvalue
-            when Integer
-                return "%o" % newvalue
-            when Symbol
+            if newvalue.is_a?(Integer) then
+                return "%o" % newvalue 
+            elsif ( newvalue.is_a?(Symbol) or ( newvalue.is_a?(String) and newvalue.match(SYMREG))) then
                 return newvalue
             else
                 raise Puppet::DevError, "Invalid 'should' value for mode: %s" %
@@ -116,15 +123,12 @@ module Puppet
         end
 
         munge do |should|
-            # This handles both numbers and symbolic modes matching the regex
-            # /^(([ugoa]+)([+-=])([rwx]+),?)$/ 
+            # This handles both numbers and symbolic modes matching SYMREG
             #
             # Note: This now returns a string and the accepting function must
             # know how to handle it!
-            lregex = /^(([ugoa]+)([+-=])([rwxst]+|[ugo]),?)+$/
 
             value = should
-
             if value.is_a?(String)
                 if value =~ /^\d+$/ then
                     unless value =~ /^0/
@@ -138,12 +142,12 @@ module Puppet
                         raise Puppet::DevError, "Could not convert %s to integer" %
                             old.inspect
                     end
-                elsif value.match(lregex).nil? then
-                    raise Puppet::DevError, "Symbolic mode %s does not match #{lregex}" %
+                elsif value.match(SYMREG).nil? then
+                    raise Puppet::DevError, "Symbolic mode %s does not match #{SYMREG}" %
                         value.inspect
                 end
             end
-            return sym2oct(value,@resource[:path])
+            return value
        end
 
         # If we're a directory, we need to be executable for all cases
@@ -169,7 +173,14 @@ module Puppet
                 self.debug "Not managing symlink mode"
                 return true
             else
-                return super(currentvalue)
+                retval = super(currentvalue)
+                if !retval then
+                    if currentvalue == sym2oct(resource.stat,self.should) then
+                        retval = true
+                    end
+                end
+
+                return retval
             end
         end
 
@@ -190,7 +201,7 @@ module Puppet
         end
 
         def sync
-            mode = self.should
+            mode = sym2oct(resource.stat,self.should)
             begin
                 File.chmod(mode, @resource[:path])
             rescue => detail
