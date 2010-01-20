@@ -47,8 +47,8 @@ module Puppet
         # The current mode (curmode) can be represented either as an integer
         # string or as a File::Stat object.
         def sym2oct(curmode,newmode)
-            if !curmode.nil? and curmode.to_s =~ /^\d+$/ then
-                value = curmode
+            if !newmode.nil? and newmode.to_s =~ /^\d+$/ then
+                value = newmode
             else
                 # Set this to 0600 so that we can actually read and write the
                 # file as a normal user.
