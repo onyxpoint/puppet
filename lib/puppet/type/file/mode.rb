@@ -57,7 +57,7 @@ module Puppet
                 elsif curmode.is_a?(File::Stat) then
                     value = curmode.mode & 07777
                 else
-                    value = Integer(curmode)
+                    value = Integer("0#{curmode}")
                 end
 
                 # This needs to remain variable.
@@ -73,7 +73,7 @@ module Puppet
                         }
 
                 newmode.split(",").each do |cmd|
-                    match = cmd.match(SYMREG) or return curmode
+                    match = cmd.match(SYMREG) or return value
                     # The following vars are directly dependent on the
                     # structure of SYMREG above
                     who = match[2]
@@ -93,8 +93,9 @@ module Puppet
                         when "=": value = ( mask & who ) | ( value & ~(who & 0777) )
                     end
                 end
+                value = "0%o" % value
             end
-            Integer("0%o" % value)
+            Integer(value)
         end
 
 
