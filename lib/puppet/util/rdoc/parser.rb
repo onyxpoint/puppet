@@ -15,8 +15,6 @@ module RDoc
 class Parser
     extend ParserFactory
 
-    attr_accessor :ast, :input_file_name, :top_level
-
     # parser registration into RDoc
     parse_files_matching(/\.(rb|pp)$/)
 
@@ -40,6 +38,8 @@ class Parser
         scan_top_level(@top_level)
         @top_level
     end
+
+    private
 
     # Due to a bug in RDoc, we need to roll our own find_module_named
     # The issue is that RDoc tries harder by asking the parent for a class/module
@@ -147,31 +147,14 @@ class Parser
 
     # create documentation for include statements we can find in +code+
     # and associate it with +container+
-    def scan_for_include_or_require(container, code)
-        code = [code] unless code.is_a?(Array)
+    def scan_for_include(container, code)
         code.each do |stmt|
-            scan_for_include_or_require(container,stmt.children) if stmt.is_a?(Puppet::Parser::AST::ASTArray)
+            scan_for_include(container,stmt.children) if stmt.is_a?(Puppet::Parser::AST::ASTArray)
 
-            if stmt.is_a?(Puppet::Parser::AST::Function) and ['include','require'].include?(stmt.name)
+            if stmt.is_a?(Puppet::Parser::AST::Function) and stmt.name == "include"
                 stmt.arguments.each do |included|
-                    Puppet.debug "found #{stmt.name}: #{included.value}"
-                    container.send("add_#{stmt.name}",Include.new(included.value, stmt.doc))
-                end
-            end
-        end
-    end
-
-    # create documentation for realize statements we can find in +code+
-    # and associate it with +container+
-    def scan_for_realize(container, code)
-        code = [code] unless code.is_a?(Array)
-        code.each do |stmt|
-            scan_for_realize(container,stmt.children) if stmt.is_a?(Puppet::Parser::AST::ASTArray)
-
-            if stmt.is_a?(Puppet::Parser::AST::Function) and stmt.name == 'realize'
-                stmt.arguments.each do |realized|
-                    Puppet.debug "found #{stmt.name}: #{realized}"
-                    container.add_realize(Include.new(realized.to_s, stmt.doc))
+                    Puppet.debug "found include: %s" % included.value
+                    container.add_include(Include.new(included.value, stmt.doc))
                 end
             end
         end
@@ -180,7 +163,6 @@ class Parser
     # create documentation for global variables assignements we can find in +code+
     # and associate it with +container+
     def scan_for_vardef(container, code)
-        code = [code] unless code.is_a?(Array)
         code.each do |stmt|
             scan_for_vardef(container,stmt.children) if stmt.is_a?(Puppet::Parser::AST::ASTArray)
 
@@ -194,7 +176,6 @@ class Parser
     # create documentation for resources we can find in +code+
     # and associate it with +container+
     def scan_for_resource(container, code)
-        code = [code] unless code.is_a?(Array)
         code.each do |stmt|
             scan_for_resource(container,stmt.children) if stmt.is_a?(Puppet::Parser::AST::ASTArray)
 
@@ -221,16 +202,6 @@ class Parser
         end
     end
 
-    def resource_stmt_to_ref(stmt)
-        type = stmt.type.split("::").collect { |s| s.capitalize }.join("::")
-        title = stmt.title.is_a?(Puppet::Parser::AST::ASTArray) ? stmt.title.to_s.gsub(/\[(.*)\]/,'\1') : stmt.title.to_s
-
-        param = stmt.params.children.collect do |p|
-            {"name" => p.param, "value" => p.value.to_s}
-        end
-        PuppetResource.new(type, title, stmt.doc, param)
-    end
-
     # create documentation for a class named +name+
     def document_class(name, klass, container)
         Puppet.debug "rdoc: found new class %s" % name
@@ -253,8 +224,7 @@ class Parser
         code = klass.code.children if klass.code.is_a?(Puppet::Parser::AST::ASTArray)
         code ||= klass.code
         unless code.nil?
-            scan_for_include_or_require(cls, code)
-            scan_for_realize(cls, code)
+            scan_for_include(cls, code)
             scan_for_resource(cls, code) if Puppet.settings[:document_all]
         end
 
@@ -277,8 +247,7 @@ class Parser
         code = node.code.children if node.code.is_a?(Puppet::Parser::AST::ASTArray)
         code ||= node.code
         unless code.nil?
-            scan_for_include_or_require(n, code)
-            scan_for_realize(n, code)
+            scan_for_include(n, code)
             scan_for_vardef(n, code)
             scan_for_resource(n, code) if Puppet.settings[:document_all]
         end
@@ -319,8 +288,8 @@ class Parser
 
         # register method into the container
         meth =  AnyMethod.new(declaration, name)
-        meth.comment = define.doc
         container.add_method(meth)
+        meth.comment = define.doc
         look_for_directives_in(container, meth.comment) unless meth.comment.empty?
         meth.params = "( " + declaration + " )"
         meth.visibility = :public
@@ -334,13 +303,13 @@ class Parser
     # that contains the documentation
     def parse_elements(container)
         Puppet.debug "rdoc: scanning manifest"
-        @ast.hostclasses.values.sort { |a,b| a.name <=> b.name }.each do |klass|
-            name = klass.name
+        @ast.hostclasses.values.sort { |a,b| a.classname <=> b.classname }.each do |klass|
+            name = klass.classname
             if klass.file == @input_file_name
                 unless name.empty?
                     document_class(name,klass,container)
                 else # on main class document vardefs
-                    code = klass.code.children if klass.code.is_a?(Puppet::Parser::AST::ASTArray)
+                    code = klass.code.children unless klass.code.is_a?(Puppet::Parser::AST::ASTArray)
                     code ||= klass.code
                     scan_for_vardef(container, code) unless code.nil?
                 end
@@ -381,9 +350,9 @@ class Parser
                     comments += $1 + "\n"
                 elsif line =~ /^[ \t]*Facter.add\(['"](.*?)['"]\)/
                     current_fact = Fact.new($1,{})
+                    container.add_fact(current_fact)
                     look_for_directives_in(container, comments) unless comments.empty?
                     current_fact.comment = comments
-                    container.add_fact(current_fact)
                     current_fact.record_location(@top_level)
                     comments = ""
                     Puppet.debug "rdoc: found custom fact %s" % current_fact.name
